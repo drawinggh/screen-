@@ -1,234 +1,310 @@
-name: Build KeepAwake Xposed Module
-
+name: Build APK
 on:
-  push:
-    branches: [ "main", "master" ]
   workflow_dispatch:
+  push:
+    branches: [ main, master ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-    - name: Setup Android SDK
-      uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.9
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
-      with:
-        gradle-version: '8.2'
+      - name: Create project files
+        run: |
+          set -e
+          mkdir -p proj/app/src/main/assets proj/app/src/main/res/values proj/app/src/main/java/com/example/shamsiui
+          cd proj
 
-    - name: Create Project Files
-      run: |
-        mkdir -p app/src/main/java/com/example/keepawake
-        mkdir -p app/src/main/assets
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven {
+                      url = uri("https://api.xposed.info/")
+                      content { includeGroup("de.robv.android.xposed") }
+                  }
+              }
+          }
+          rootProject.name = "ShamsiSystemUI"
+          include(":app")
+          EOF
 
-        cat > settings.gradle << 'EOF'
-        pluginManagement {
-            repositories {
-                google()
-                mavenCentral()
-                gradlePluginPortal()
-            }
-        }
-        dependencyResolutionManagement {
-            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-            repositories {
-                google()
-                mavenCentral()
-            }
-        }
-        rootProject.name = "KeepAwake"
-        include ':app'
-        EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+          }
+          EOF
 
-        cat > build.gradle << 'EOF'
-        plugins {
-            id 'com.android.application' version '8.1.2' apply false
-            id 'org.jetbrains.kotlin.android' version '1.9.0' apply false
-        }
-        EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          kotlin.code.style=official
+          EOF
 
-        cat > app/build.gradle << 'EOF'
-        plugins {
-            id 'com.android.application'
-            id 'org.jetbrains.kotlin.android'
-        }
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
 
-        android {
-            namespace 'com.example.keepawake'
-            compileSdk 34
+          android {
+              namespace = "com.example.shamsiui"
+              compileSdk = 35
 
-            defaultConfig {
-                applicationId "com.example.keepawake"
-                minSdk 24
-                targetSdk 34
-                versionCode 1
-                versionName "1.0"
-            }
+              defaultConfig {
+                  applicationId = "com.example.shamsiui"
+                  minSdk = 28
+                  targetSdk = 35
+                  versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt() + 100
+                  versionName = "1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+                  
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
 
-            buildTypes {
-                release {
-                    minifyEnabled false
-                }
-            }
-            compileOptions {
-                sourceCompatibility JavaVersion.VERSION_1_8
-                targetCompatibility JavaVersion.VERSION_1_8
-            }
-            kotlinOptions {
-                jvmTarget = '1.8'
-            }
-        }
+              buildTypes {
+                  release {
+                      isMinifyEnabled = true
+                      isShrinkResources = true
+                      proguardFiles(
+                          getDefaultProguardFile("proguard-android-optimize.txt"),
+                          "proguard-rules.pro"
+                      )
+                      signingConfig = signingConfigs.getByName("debug")
+                  }
+              }
+          }
 
-        dependencies {
-            compileOnly 'de.robv.android.xposed:api:82'
-        }
-        EOF
+          dependencies {
+              compileOnly("de.robv.android.xposed:api:82")
+          }
+          EOF
 
-        cat > app/src/main/AndroidManifest.xml << 'EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application
-                android:allowBackup="true"
-                android:label="KeepAwake"
-                android:supportsRtl="true">
-                <meta-data android:name="xposedmodule" android:value="true" />
-                <meta-data android:name="xposeddescription" android:value="Keep screen on in LockScreen based on schedule" />
-                <meta-data android:name="xposedminversion" android:value="82" />
-            </application>
-        </manifest>
-        EOF
+          cat > app/proguard-rules.pro <<'EOF'
+          -keep class com.example.shamsiui.MainHook { *; }
+          -keep class de.robv.android.xposed.** { *; }
+          -keepclassmembers class * extends de.robv.android.xposed.IXposedHookLoadPackage {
+              public void handleLoadPackage(...);
+          }
+          EOF
 
-        echo "com.example.keepawake.MainHook" > app/src/main/assets/xposed_init
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="Shamsi SystemUI">
+                  <meta-data android:name="xposedmodule" android:value="true" />
+                  <meta-data android:name="xposeddescription"
+                      android:value="Persian (Jalali) date in SystemUI" />
+                  <meta-data android:name="xposedminversion" android:value="93" />
+                  <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+              </application>
+          </manifest>
+          EOF
 
-        cat > app/src/main/java/com/example/keepawake/MainHook.kt << 'EOF'
-        package com.example.keepawake
+          cat > app/src/main/res/values/arrays.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string-array name="xposed_scope">
+                  <item>com.android.systemui</item>
+              </string-array>
+          </resources>
+          EOF
 
-        import android.content.Context
-        import android.os.Bundle
-        import android.os.PowerManager
-        import de.robv.android.xposed.IXposedHookLoadPackage
-        import de.robv.android.xposed.XC_MethodHook
-        import de.robv.android.xposed.XposedBridge
-        import de.robv.android.xposed.XposedHelpers
-        import de.robv.android.xposed.callbacks.XC_LoadPackage
-        import java.io.File
-        import java.util.Calendar
+          echo "com.example.shamsiui.MainHook" > app/src/main/assets/xposed_init
 
-        private const val TARGET = "com.android.systemui"
-        private const val DIR = "/data/user_de/0/com.android.systemui/files"
+          cat > app/src/main/java/com/example/shamsiui/MainHook.kt <<'EOF'
+          package com.example.shamsiui
 
-        class MainHook : IXposedHookLoadPackage {
-            private var wakeLock: PowerManager.WakeLock? = null
-            private var isLocked = false
-            private var isScreenOn = true
+          import android.content.Context
+          import android.icu.text.SimpleDateFormat
+          import android.icu.util.ULocale
+          import android.widget.TextClock
+          import android.widget.TextView
+          import de.robv.android.xposed.IXposedHookLoadPackage
+          import de.robv.android.xposed.XC_MethodHook
+          import de.robv.android.xposed.XposedBridge
+          import de.robv.android.xposed.XposedHelpers
+          import de.robv.android.xposed.callbacks.XC_LoadPackage
+          import java.io.File
+          import java.util.Date
 
-            override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
-                if (lpparam.packageName != TARGET) return
-                val cl = lpparam.classLoader
-                val clazz = XposedHelpers.findClassIfExists("com.android.systemui.keyguard.KeyguardViewMediator", cl) ?: return
+          class MainHook : IXposedHookLoadPackage {
 
-                XposedHelpers.findAndHookMethod(clazz, "onStartedWakingUp", object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        isScreenOn = true
-                        updateWakeLock(param.thisObject)
-                    }
-                })
+              companion object {
+                  const val TRACE = false
 
-                XposedHelpers.findAndHookMethod(clazz, "onStartedGoingToSleep", Int::class.javaPrimitiveType, object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        isScreenOn = false
-                        updateWakeLock(param.thisObject)
-                    }
-                })
+                  private const val TAG = "ShamsiUI"
+                  private val seen = HashSet<String>()
+                  private var logFile: File? = null
 
-                XposedHelpers.findAndHookMethod(clazz, "doKeyguardLocked", Bundle::class.java, object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        isLocked = true
-                        updateWakeLock(param.thisObject)
-                    }
-                })
+                  private const val DAY = "(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*"
+                  private const val MON = "(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
+                  private val dateOnly = Regex("^$DAY,?\\s+(?:\\d{1,2}\\s+$MON|$MON\\s+\\d{1,2})$")
+                  private val dayOnly  = Regex("^$DAY$")
+                  private val monDay   = Regex("^$MON\\s+\\d{1,2}$")
+                  private val quoted = Regex("'[^']*'")
+                  private val dateLetters = Regex("[EMdyLc]")
+                  private val timeLetters = Regex("[hHkKmsaSzZ]")
 
-                XposedHelpers.findAndHookMethod(clazz, "doKeyguardUnlock", object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        isLocked = false
-                        updateWakeLock(param.thisObject)
-                    }
-                })
-            }
+                  private val faLocale by lazy { ULocale("fa_IR@calendar=persian") }
 
-            private fun updateWakeLock(mediator: Any) {
-                try {
-                    val ctx = XposedHelpers.getObjectField(mediator, "mContext") as? Context ?: return
+                  fun persian(pattern: String): String =
+                      SimpleDateFormat(pattern, faLocale).format(Date())
 
-                    if (isLocked && isScreenOn && isScheduleActive()) {
-                        if (wakeLock == null) {
-                            val pm = ctx.getSystemService(Context.POWER_SERVICE) as PowerManager
-                            @Suppress("DEPRECATION")
-                            wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "KeepAwake:WakeLock")
-                        }
-                        if (wakeLock?.isHeld == false) wakeLock?.acquire()
-                    } else {
-                        if (wakeLock?.isHeld == true) wakeLock?.release()
-                    }
-                } catch (t: Throwable) {
-                    XposedBridge.log("KeepAwake Error: $t")
-                }
-            }
+                  fun fileLog(ctx: Context?, msg: String) {
+                      XposedBridge.log("$TAG: $msg")
+                      try {
+                          if (logFile == null && ctx != null) {
+                              val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+                              logFile = File(dir, "shamsi_log.txt")
+                          }
+                          logFile?.appendText("${System.currentTimeMillis()}  $msg\n")
+                      } catch (_: Throwable) {}
+                  }
 
-            private fun isScheduleActive(): Boolean {
-                try {
-                    val fEnabled = File(DIR, "keep_awake_enabled")
-                    if (!fEnabled.exists() || fEnabled.readText().trim() != "1") return false
+                  fun logOnce(ctx: Context?, msg: String) {
+                      if (seen.add(msg)) fileLog(ctx, msg)
+                  }
+              }
 
-                    val fStart = File(DIR, "keep_awake_start")
-                    val fEnd = File(DIR, "keep_awake_end")
-                    if (!fStart.exists() || !fEnd.exists()) return true
+              override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+                  if (lpparam.packageName != "com.android.systemui") return
+                  XposedBridge.log("$TAG: loaded in SystemUI")
+                  hookDateView(lpparam)
+                  hookSetText()
+              }
 
-                    val start = fStart.readText().trim()
-                    val end = fEnd.readText().trim()
+              private fun hookDateView(lpparam: XC_LoadPackage.LoadPackageParam) {
+                  try {
+                      XposedHelpers.findAndHookMethod(
+                          "com.android.systemui.statusbar.policy.DateView",
+                          lpparam.classLoader,
+                          "updateClock",
+                          object : XC_MethodHook() {
+                              override fun afterHookedMethod(param: MethodHookParam) {
+                                  try {
+                                      val tv = param.thisObject as TextView
+                                      tv.text = persian("EEEE d MMMM")
+                                  } catch (t: Throwable) {
+                                      fileLog(null, "DateView error: $t")
+                                  }
+                              }
+                          }
+                      )
+                      XposedBridge.log("$TAG: DateView hooked")
+                  } catch (t: Throwable) {
+                      XposedBridge.log("$TAG: DateView hook failed: $t")
+                  }
+              }
 
-                    val cal = Calendar.getInstance()
-                    val currentMin = cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE)
+              private fun hookSetText() {
+                  try {
+                      XposedHelpers.findAndHookMethod(
+                          TextView::class.java,
+                          "setText",
+                          CharSequence::class.java,
+                          TextView.BufferType::class.java,
+                          object : XC_MethodHook() {
+                              override fun beforeHookedMethod(param: MethodHookParam) {
+                                  try {
+                                      val v = param.thisObject as TextView
+                                      val old = param.args[0]?.toString() ?: return
 
-                    val startParts = start.split(":")
-                    val endParts = end.split(":")
-                    if (startParts.size != 2 || endParts.size != 2) return true
+                                      if (v is TextClock) {
+                                          val pattern = listOf("mFormat", "mFormat12", "mFormat24")
+                                              .mapNotNull {
+                                                  runCatching {
+                                                      XposedHelpers.getObjectField(v, it)?.toString()
+                                                  }.getOrNull()
+                                              }
+                                              .firstOrNull { it.isNotEmpty() }
+                                          if (pattern != null) {
+                                              val bare = pattern.replace(quoted, "")
+                                              if (dateLetters.containsMatchIn(bare) &&
+                                                  !timeLetters.containsMatchIn(bare)
+                                              ) {
+                                                  val new = persian(pattern)
+                                                  param.args[0] = new
+                                                  if (TRACE) logOnce(v.context,
+                                                      "CLOCK pattern=$pattern -> $new")
+                                                  return
+                                              }
+                                          }
+                                      }
 
-                    val startMin = (startParts[0].toIntOrNull() ?: 0) * 60 + (startParts[1].toIntOrNull() ?: 0)
-                    val endMin = (endParts[0].toIntOrNull() ?: 0) * 60 + (endParts[1].toIntOrNull() ?: 0)
+                                      if (v is TextClock) {
+                                          when {
+                                              dayOnly.matches(old) -> {
+                                                  param.args[0] = persian("EEEE")
+                                                  if (TRACE) logOnce(v.context,
+                                                      "CLOCK-DAY $old -> ${param.args[0]}")
+                                                  return
+                                              }
+                                              monDay.matches(old) -> {
+                                                  param.args[0] = persian("d MMMM")
+                                                  if (TRACE) logOnce(v.context,
+                                                      "CLOCK-MON $old -> ${param.args[0]}")
+                                                  return
+                                              }
+                                          }
+                                      }
 
-                    return if (startMin <= endMin) {
-                        currentMin in startMin..endMin
-                    } else {
-                        currentMin >= startMin || currentMin <= endMin
-                    }
-                } catch (_: Throwable) {
-                    return false
-                }
-            }
-        }
-        EOF
+                                      if (old.length <= 30 && dateOnly.matches(old)) {
+                                          val new = persian("EEE d MMM")
+                                          param.args[0] = new
+                                          if (TRACE) {
+                                              val idName = try {
+                                                  v.resources.getResourceEntryName(v.id)
+                                              } catch (_: Throwable) { "no-id" }
+                                              logOnce(v.context,
+                                                  "TEXT class=${v.javaClass.name} id=$idName: $old -> $new")
+                                          }
+                                      }
+                                  } catch (_: Throwable) {}
+                              }
+                          }
+                      )
+                  } catch (t: Throwable) {
+                      XposedBridge.log("$TAG: setText hook failed: $t")
+                  }
+              }
+          }
+          EOF
 
-        echo "=== Files created: ==="
-        find . -type f \( -name "*.gradle" -o -name "*.kt" -o -name "*.xml" -o -name "xposed_init" \) -not -path "./.git/*"
+      - name: Use MainHook.kt from repo
+        run: |
+          if [ -f MainHook.kt ]; then cp MainHook.kt proj/app/src/main/java/com/example/shamsiui/MainHook.kt; fi
 
-    - name: Build Debug APK
-      run: gradle assembleDebug --no-daemon
+      - name: Build release APK
+        working-directory: proj
+        run: gradle assembleRelease --no-daemon
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: KeepAwake-APK
-        path: app/build/outputs/apk/debug/app-debug.apk
-        retention-days: 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ShamsiSystemUI-release
+          path: proj/app/build/outputs/apk/release/*.apk
